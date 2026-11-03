@@ -49,3 +49,8 @@ test('通信確立前は認証タイマーで切断せず、確立後に開始�
  c.open=true;c.events.open();assert.equal(s.timeouts[0].ms,10000);
  s.timeouts[0].f();assert.equal(c.closed,true);
 });
+
+test('スマホ操作では本体のフォーカス移動だけで停止せず、3秒の通信断で停止',()=>{
+ const s=setup(),e=s.el;s.openRoom();s.phone(0);e('start').click();s.advance(3.2,{heartbeat:true});s.listeners.blur();assert.equal(e('phase').textContent,'試合中');
+ s.advance(2);assert.equal(e('phase').textContent,'試合中');s.advance(1.2);assert.equal(e('phase').textContent,'一時停止');
+});
