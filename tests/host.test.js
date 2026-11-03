@@ -4,16 +4,16 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import {Game,SIZE,clamp,orientation} from '../engine.js';
 function setup(){
- const elements=new Map(),listeners={},ctx=new Proxy({},{get:()=>()=>{}}),peers=[],qrURLs=[];
+ const elements=new Map(),listeners={},ctx=new Proxy({},{get:()=>()=>{}}),peers=[],qrURLs=[],timeouts=[];
  class Peer{constructor(){this.events={};peers.push(this);}on(n,f){this.events[n]=f;}destroy(){}}
  const node=()=>({children:[],style:{},append(...children){this.children.push(...children);},replaceChildren(){this.children=[];},setAttribute(){}});
  const el=id=>{if(!elements.has(id))elements.set(id,{value:id==='mode'?'race':id==='duration'?'30':'',checked:false,hidden:false,disabled:false,textContent:'',style:{},getContext:()=>ctx,scrollIntoView(){},click(){if(!this.disabled)this.onclick?.();}});return elements.get(id);};
  let frame,now=0;
  Object.assign(el('links'),node());
- const context=vm.createContext({Game,SIZE,clamp,orientation,Peer,crypto:{randomUUID:()=> 'test-token'},setTimeout:()=>1,clearTimeout(){},URLSearchParams,URL,location:{search:'',href:'https://example.com/'},document:{getElementById:el,createElement:node,addEventListener:(n,f)=>listeners[n]=f},window:{Peer,qrcode:()=>({addData:url=>qrURLs.push(url),make(){},createSvgTag:()=>'<svg></svg>'}),addEventListener:(n,f)=>listeners[n]=f},navigator:{},performance:{now:()=>now},requestAnimationFrame:f=>frame=f,console});
+ const context=vm.createContext({Game,SIZE,clamp,orientation,Peer,crypto:{randomUUID:()=> 'test-token'},setTimeout:(f,ms)=>{timeouts.push({f,ms});return timeouts.length;},clearTimeout(){},URLSearchParams,URL,location:{search:'',href:'https://example.com/'},document:{getElementById:el,createElement:node,addEventListener:(n,f)=>listeners[n]=f},window:{Peer,qrcode:()=>({addData:url=>qrURLs.push(url),make(){},createSvgTag:()=>'<svg></svg>'}),addEventListener:(n,f)=>listeners[n]=f},navigator:{},performance:{now:()=>now},requestAnimationFrame:f=>frame=f,console});
  vm.runInContext(fs.readFileSync(new URL('../app.js',import.meta.url),'utf8').replace(/^import [^\n]*\n/,''),context);
  const phones=[];
- return {el,listeners,qrURLs,openRoom(){el('room').click();peers.at(-1).events.open('host-id');},phone(team){const c={open:true,events:{},on(n,f){this.events[n]=f;},send(){},close(){this.open=false;this.events.close?.();}};peers.at(-1).events.connection(c);c.events.data({type:'hello',token:'test-token',team});c.input=(ready=true)=>c.events.data({type:'input',x:.5,y:0,ready});c.input();phones.push(c);return c;},advance(seconds,{heartbeat=false}={}){for(let i=0;i<Math.ceil(seconds*60);i++){now+=1000/60;if(heartbeat)phones.filter(c=>c.open).forEach(c=>c.input());frame(now);}}};
+ return {el,listeners,qrURLs,timeouts,incoming(c){peers.at(-1).events.connection(c);},openRoom(){el('room').click();peers.at(-1).events.open('host-id');},phone(team){const c={open:true,events:{},on(n,f){this.events[n]=f;},send(){},close(){this.open=false;this.events.close?.();}};peers.at(-1).events.connection(c);c.events.data({type:'hello',token:'test-token',team});c.input=(ready=true)=>c.events.data({type:'input',x:.5,y:0,ready});c.input();phones.push(c);return c;},advance(seconds,{heartbeat=false}={}){for(let i=0;i<Math.ceil(seconds*60);i++){now+=1000/60;if(heartbeat)phones.filter(c=>c.open).forEach(c=>c.input());frame(now);}}};
 }
 test('机上操作で開始・停止・再開・時間切れ・結果・再試合まで進行する',()=>{
  const s=setup(),e=s.el;e('test').checked=true;e('test').onchange();e('start').click();s.advance(3.1);
@@ -40,4 +40,12 @@ test('2チーム参加中の片方のセンサー停止では一時停止',()=>{
 test('両チームのQRにチーム別リンクを渡して描画する',()=>{
  const s=setup();s.openRoom();assert.equal(s.qrURLs.length,2);
  s.qrURLs.forEach((url,i)=>{const u=new URL(url);assert.equal(u.searchParams.get('team'),String(i));assert.equal(u.searchParams.get('join'),'host-id');assert.equal(u.searchParams.get('token'),'test-token');const article=s.el('links').children[i];assert.equal(article.children[1].innerHTML,'<svg></svg>');assert.equal(article.children[2].href,url);});
+});
+
+test('通信確立前は認証タイマーで切断せず、確立後に開始する',()=>{
+ const s=setup();s.openRoom();const c={open:false,events:{},on(n,f){this.events[n]=f;},close(){this.closed=true;},send(){}};
+ s.incoming(c);assert.equal(s.timeouts.length,0);
+ s.advance(12);assert.equal(c.closed,undefined);
+ c.open=true;c.events.open();assert.equal(s.timeouts[0].ms,10000);
+ s.timeouts[0].f();assert.equal(c.closed,true);
 });
