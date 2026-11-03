@@ -3,17 +3,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {Game,SIZE,clamp,orientation} from '../engine.js';
-function setup(){
- const elements=new Map(),listeners={},ctx=new Proxy({},{get:()=>()=>{}}),peers=[],qrURLs=[],timeouts=[];
+function setup(GameClass=Game){
+ const elements=new Map(),listeners={},texts=[],ctx=new Proxy({},{get:(_,key)=>key==='clearRect'?()=>{texts.length=0;}:key==='fillText'?text=>texts.push(String(text)):()=>{}}),peers=[],qrURLs=[],timeouts=[];
  class Peer{constructor(){this.events={};peers.push(this);}on(n,f){this.events[n]=f;}destroy(){}}
  const node=()=>({children:[],style:{},append(...children){this.children.push(...children);},replaceChildren(){this.children=[];},setAttribute(){}});
  const el=id=>{if(!elements.has(id))elements.set(id,{value:id==='mode'?'race':id==='duration'?'30':'',checked:false,hidden:false,disabled:false,textContent:'',style:{},getContext:()=>ctx,scrollIntoView(){},click(){if(!this.disabled)this.onclick?.();}});return elements.get(id);};
  let frame,now=0;
  Object.assign(el('links'),node());
- const context=vm.createContext({Game,SIZE,clamp,orientation,Peer,crypto:{randomUUID:()=> 'test-token'},setTimeout:(f,ms)=>{timeouts.push({f,ms});return timeouts.length;},clearTimeout(){},URLSearchParams,URL,location:{search:'',href:'https://example.com/'},document:{getElementById:el,createElement:node,addEventListener:(n,f)=>listeners[n]=f},window:{Peer,qrcode:()=>({addData:url=>qrURLs.push(url),make(){},createSvgTag:()=>'<svg></svg>'}),addEventListener:(n,f)=>listeners[n]=f},navigator:{},performance:{now:()=>now},requestAnimationFrame:f=>frame=f,console});
+ const context=vm.createContext({Game:GameClass,SIZE,clamp,orientation,Peer,crypto:{randomUUID:()=> 'test-token'},setTimeout:(f,ms)=>{timeouts.push({f,ms});return timeouts.length;},clearTimeout(){},URLSearchParams,URL,location:{search:'',href:'https://example.com/'},document:{getElementById:el,createElement:node,addEventListener:(n,f)=>listeners[n]=f},window:{Peer,qrcode:()=>({addData:url=>qrURLs.push(url),make(){},createSvgTag:()=>'<svg></svg>'}),addEventListener:(n,f)=>listeners[n]=f},navigator:{},performance:{now:()=>now},requestAnimationFrame:f=>frame=f,console});
  vm.runInContext(fs.readFileSync(new URL('../app.js',import.meta.url),'utf8').replace(/^import [^\n]*\n/,''),context);
  const phones=[];
- return {el,listeners,qrURLs,timeouts,incoming(c){peers.at(-1).events.connection(c);},openRoom(){el('room').click();peers.at(-1).events.open('host-id');},phone(team){const c={open:true,events:{},on(n,f){this.events[n]=f;},send(){},close(){this.open=false;this.events.close?.();}};peers.at(-1).events.connection(c);c.events.data({type:'hello',token:'test-token',team});c.input=(ready=true)=>c.events.data({type:'input',x:.5,y:0,ready});c.input();phones.push(c);return c;},advance(seconds,{heartbeat=false}={}){for(let i=0;i<Math.ceil(seconds*60);i++){now+=1000/60;if(heartbeat)phones.filter(c=>c.open).forEach(c=>c.input());frame(now);}}};
+ return {el,listeners,qrURLs,timeouts,texts,incoming(c){peers.at(-1).events.connection(c);},openRoom(){el('room').click();peers.at(-1).events.open('host-id');},phone(team){const c={open:true,events:{},on(n,f){this.events[n]=f;},send(){},close(){this.open=false;this.events.close?.();}};peers.at(-1).events.connection(c);c.events.data({type:'hello',token:'test-token',team});c.input=(ready=true)=>c.events.data({type:'input',x:.5,y:0,ready});c.input();phones.push(c);return c;},advance(seconds,{heartbeat=false}={}){for(let i=0;i<Math.ceil(seconds*60);i++){now+=1000/60;if(heartbeat)phones.filter(c=>c.open).forEach(c=>c.input());frame(now);}}};
 }
 test('机上操作で開始・停止・再開・時間切れ・結果・再試合まで進行する',()=>{
  const s=setup(),e=s.el;e('test').checked=true;e('test').onchange();e('start').click();s.advance(3.1);
@@ -53,4 +53,13 @@ test('通信確立前は認証タイマーで切断せず、確立後に開始�
 test('スマホ操作では本体のフォーカス移動だけで停止せず、3秒の通信断で停止',()=>{
  const s=setup(),e=s.el;s.openRoom();s.phone(0);e('start').click();s.advance(3.2,{heartbeat:true});s.listeners.blur();assert.equal(e('phase').textContent,'試合中');
  s.advance(2);assert.equal(e('phase').textContent,'試合中');s.advance(1.2);assert.equal(e('phase').textContent,'一時停止');
+});
+
+for(const mode of ['race','territory'])test(`${mode} トースト上に落下と3・2・1を表示し、全体の試合は続行`,()=>{
+ class FallingGame extends Game{constructor(m){super(m);this.balls[0].x=SIZE-.01;this.balls[0].vx=30;}}
+ const s=setup(FallingGame),e=s.el;e('mode').value=mode;e('mode').onchange();e('test').checked=true;e('test').onchange();e('start').click();
+ s.advance(3.2);assert.equal(e('phase').textContent,'試合中');assert.ok(s.texts.includes('落下！！'));assert.ok(s.texts.includes('3'));
+ s.advance(1);assert.ok(s.texts.includes('2'));s.advance(1);assert.ok(s.texts.includes('1'));
+ e('pause').click();s.advance(2);assert.ok(s.texts.includes('1'));assert.equal(e('phase').textContent,'一時停止');
+ e('pause').click();s.advance(4.2);assert.ok(!s.texts.includes('落下！！'));assert.equal(e('phase').textContent,'試合中');
 });
